@@ -4,7 +4,7 @@
 // hand-rolled PNG encoder (zlib deflate + manual PNG chunks). Node 22
 // standard library only, no network, and the same bytes on every run.
 import { deflateSync } from "node:zlib";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const W = 1024;
 const H = 1024;
@@ -85,6 +85,26 @@ function encodePng(): Buffer {
   }
   const idat = deflateSync(raw, { level: 9 });
   return Buffer.concat([sig, pngChunk("IHDR", ihdr), pngChunk("IDAT", idat), pngChunk("IEND", Buffer.alloc(0))]);
+}
+
+// Read a written PNG back and verify its signature and IHDR dimensions,
+// so a truncated or corrupt write can never pass as a valid entry.
+function verifyPng(path: string): void {
+  const bytes = readFileSync(path);
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(sig)) {
+    throw new Error("entry.png does not start with the PNG signature");
+  }
+  const ihdrLen = bytes.readUInt32BE(8);
+  const ihdrType = bytes.subarray(12, 16).toString("ascii");
+  if (ihdrLen !== 13 || ihdrType !== "IHDR") {
+    throw new Error("entry.png has no valid IHDR chunk");
+  }
+  const w = bytes.readUInt32BE(16);
+  const h = bytes.readUInt32BE(20);
+  if (w !== W || h !== H) {
+    throw new Error(`entry.png is ${w}x${h}; expected ${W}x${H}`);
+  }
 }
 
 // ---- 5x7 bitmap font ----------------------------------------------------
@@ -397,7 +417,9 @@ function main(): void {
   compose();
   const out = process.env.MAKEFUN_OUTPUT_DIR || "/output";
   mkdirSync(out, { recursive: true });
-  writeFileSync(out + "/entry.png", encodePng());
+  const target = out + "/entry.png";
+  writeFileSync(target, encodePng());
+  verifyPng(target);
 }
 
 main();
